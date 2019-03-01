@@ -1,121 +1,101 @@
-import PubSub from '../lib/pubsub.js';
+import PubSub from "../lib/pubsub.js";
 
+// 简单版全局状态管理库
 export default class Store {
-    constructor(params) {
-        let self = this;
+  constructor(params) {
+    let self = this;
 
-        // Add some default objects to hold our actions, mutations and state
-        self.actions = {};
-        self.mutations = {};
-        self.state = {};
+    // 用于跟踪事件和修改状态，在时间旅行中常用
+    self.actions = {};
+    self.mutations = {};
+    self.state = {};
 
-        // A status enum to set during actions and mutations
-        self.status = 'resting';
+    // 触发actions到state修改的状态，防止同一时刻的修改行为
+    self.status = "resting";
 
-        // Attach our PubSub module as an `events` element
-        self.events = new PubSub();
+    // 基于订阅模式的事件列表
+    self.events = new PubSub();
 
-        // Look in the passed params object for actions and mutations 
-        // that might have been passed in
-        if(params.hasOwnProperty('actions')) {
-            self.actions = params.actions;
-        }
-        
-        if(params.hasOwnProperty('mutations')) {
-            self.mutations = params.mutations;
-        }
-
-        // Set our state to be a Proxy. We are setting the default state by 
-        // checking the params and defaulting to an empty object if no default 
-        // state is passed in
-        self.state = new Proxy((params.state || {}), {
-            set: function(state, key, value) {
-                
-                // Set the value as we would normally
-                state[key] = value;
-                
-                // Trace out to the console. This will be grouped by the related action
-                console.log(`stateChange: ${key}: ${value}`);
-                
-                // Publish the change event for the components that are listening
-                self.events.publish('stateChange', self.state);
-                
-                // Give the user a little telling off if they set a value directly
-                if(self.status !== 'mutation') {
-                    console.warn(`You should use a mutation to set ${key}`);
-                }
-                
-                // Reset the status ready for the next operation
-                self.status = 'resting';
-                
-                return true;
-            }
-        });
+    // 在创建Store实例时的初始化过程
+    if (params.hasOwnProperty("actions")) {
+      self.actions = params.actions;
     }
 
-    /**
-     * A dispatcher for actions that looks in the actions 
-     * collection and runs the action if it can find it
-     *
-     * @param {string} actionKey
-     * @param {mixed} payload
-     * @returns {boolean}
-     * @memberof Store
-     */
-    dispatch(actionKey, payload) {
-  
-        let self = this;
-        
-        // Run a quick check to see if the action actually exists
-        // before we try to run it
-        if(typeof self.actions[actionKey] !== 'function') {
-          console.error(`Action "${actionKey} doesn't exist.`);
-          return false;
+    if (params.hasOwnProperty("mutations")) {
+      self.mutations = params.mutations;
+    }
+
+    // 基于属性代理机制，在state发生变化时触发事件队列
+    self.state = new Proxy(params.state || {}, {
+      set: function(state, key, value) {
+        state[key] = value;
+
+        console.log(`stateChange: ${key}: ${value}`);
+
+        self.events.publish("stateChange", self.state);
+
+        // 必须使用mutation才能修改state状态，而禁止直接修改state属性
+        if (self.status !== "mutation") {
+          console.warn(`You should use a mutation to set ${key}`);
         }
-        
-        // Create a console group which will contain the logs from our Proxy etc
-        console.groupCollapsed(`ACTION: ${actionKey}`);
-        
-        // Let anything that's watching the status know that we're dispatching an action
-        self.status = 'action';
-        
-        // Actually call the action and pass it the Store context and whatever payload was passed
-        self.actions[actionKey](self, payload);
-        
-        // Close our console group to keep things nice and neat
-        console.groupEnd();
+
+        // 当前store对象处于闲置状态，可以发起下一轮action
+        self.status = "resting";
 
         return true;
+      }
+    });
+  }
+
+  //简化的action触发行为，对异步行为无法处理
+  dispatch(actionKey, payload) {
+    let self = this;
+
+    //  action生成函数必须存在
+    if (typeof self.actions[actionKey] !== "function") {
+      console.error(`Action "${actionKey} doesn't exist.`);
+      return false;
     }
 
-    /**
-     * Look for a mutation and modify the state object 
-     * if that mutation exists by calling it
-     *
-     * @param {string} mutationKey
-     * @param {mixed} payload
-     * @returns {boolean}
-     * @memberof Store
-     */
-    commit(mutationKey, payload) {
-        let self = this;
-        
-        // Run a quick check to see if this mutation actually exists
-        // before trying to run it
-        if(typeof self.mutations[mutationKey] !== 'function') {
-            console.log(`Mutation "${mutationKey}" doesn't exist`);
-            return false;
-        }
-        
-        // Let anything that's watching the status know that we're mutating state
-        self.status = 'mutation';
-        
-        // Get a new version of the state by running the mutation and storing the result of it
-        let newState = self.mutations[mutationKey](self.state, payload);
-        
-        // Merge the old and new together to create a new state and set it
-        self.state = Object.assign(self.state, newState);
+    // 日志
+    console.groupCollapsed(`ACTION: ${actionKey}`);
 
-        return true;
+    // 修改store实例当前状态
+    self.status = "action";
+
+    // 触发action函数执行
+    self.actions[actionKey](self, payload);
+
+    console.groupEnd();
+
+    return true;
+  }
+
+  /**
+   * Look for a mutation and modify the state object
+   * if that mutation exists by calling it
+   *
+   * @param {string} mutationKey
+   * @param {mixed} payload
+   * @returns {boolean}
+   * @memberof Store
+   */
+  commit(mutationKey, payload) {
+    let self = this;
+
+    // mutation用于修改state状态
+    if (typeof self.mutations[mutationKey] !== "function") {
+      console.log(`Mutation "${mutationKey}" doesn't exist`);
+      return false;
     }
+
+    // 更新store当前状态
+    self.status = "mutation";
+
+    // 下面两步会修改store实例中的state对象，并通知监听的事件回调
+    let newState = self.mutations[mutationKey](self.state, payload);
+    self.state = Object.assign(self.state, newState);
+
+    return true;
+  }
 }
